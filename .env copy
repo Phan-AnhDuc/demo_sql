@@ -1,0 +1,6 @@
+# .env
+DB_SERVER=localhost              # hoặc IP: 192.168.1.100 hoặc TênServer\SQLEXPRESS
+DB_DATABASE=HeThongQuanLyCuaHang_FMSTYLE
+DB_USER=sa                       # hoặc tài khoản SQL của bạn
+DB_PASSWORD=anvip123   # mật khẩu SQL Server
+DB_PORT=1433                     # mặc định
