@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Danh sách Phòng ban</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f6f9;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+        .container {
+            max-width: 900px;
+            margin: 40px auto;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+        .status {
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            padding: 14px 16px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #3498db;
+            color: white;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 14px;
+            letter-spacing: 0.5px;
+        }
+        tr:hover {
+            background-color: #f8f9fa;
+        }
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+        .count {
+            text-align: center;
+            font-size: 18px;
+            color: #27ae60;
+            margin: 20px 0;
+            font-weight: bold;
+        }
+        .loading {
+            text-align: center;
+            font-size: 18px;
+            color: #3498db;
+            margin: 40px 0;
+        }
+        .btn-refresh {
+            display: block;
+            margin: 20px auto;
+            padding: 10px 24px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .btn-refresh:hover {
+            background-color: #2980b9;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Danh sách Phòng ban</h1>
+        
+        <div id="status" class="status" style="display:none;"></div>
+        <div id="loading" class="loading">Đang tải dữ liệu...</div>
+        
+        <div id="count" class="count" style="display:none;"></div>
+        
+        <table id="table" style="display:none;">
+            <thead>
+                <tr>
+                    <th>STT</th>
+                    <th>Mã Phòng ban</th>
+                    <th>Tên Phòng ban</th>
+                </tr>
+            </thead>
+            <tbody id="tbody">
+                <!-- Dữ liệu sẽ được chèn bằng JavaScript -->
+            </tbody>
+        </table>
+
+        <button class="btn-refresh" onclick="loadData()">Tải lại dữ liệu</button>
+    </div>
+
+    <script>
+        // Hàm gọi API và hiển thị dữ liệu
+        async function loadData() {
+            const statusEl = document.getElementById('status');
+            const loadingEl = document.getElementById('loading');
+            const countEl = document.getElementById('count');
+            const tableEl = document.getElementById('table');
+            const tbodyEl = document.getElementById('tbody');
+
+            // Reset giao diện
+            loadingEl.style.display = 'block';
+            statusEl.style.display = 'none';
+            tableEl.style.display = 'none';
+            countEl.style.display = 'none';
+            tbodyEl.innerHTML = '';
+
+            try {
+                const response = await fetch('http://localhost:3000/api/phongban');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+
+                // Ẩn loading
+                loadingEl.style.display = 'none';
+
+                if (result.success) {
+                    // Hiển thị thành công
+                    statusEl.textContent = 'Lấy dữ liệu thành công!';
+                    statusEl.className = 'status success';
+                    statusEl.style.display = 'block';
+
+                    // Hiển thị số lượng
+                    countEl.textContent = `Tổng cộng: ${result.count} phòng ban`;
+                    countEl.style.display = 'block';
+
+                    // Hiển thị bảng
+                    tableEl.style.display = 'table';
+
+                    // Đổ dữ liệu vào bảng
+                    result.data.forEach((pb, index) => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${index + 1}</td>
+                            <td><strong>${pb.maPB}</strong></td>
+                            <td>${pb.tenPB}</td>
+                        `;
+                        tbodyEl.appendChild(row);
+                    });
+                } else {
+                    throw new Error('API trả về success: false');
+                }
+
+            } catch (error) {
+                loadingEl.style.display = 'none';
+                statusEl.textContent = 'Lỗi: ' + error.message;
+                statusEl.className = 'status error';
+                statusEl.style.display = 'block';
+                console.error('Error:', error);
+            }
+        }
+
+        // Tự động tải khi mở trang
+        window.onload = loadData;
+    </script>
+</body>
+</html>
