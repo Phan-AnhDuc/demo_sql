@@ -1,6 +1,2 @@
-# be-Hien-ne
-yêu nhiều nèeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-hong thèm nhaaaaa
-yêu <3
-ddi ngur nha
-npm.cmd run dev
+# Dự án
+Hệ thống quản lý cửa hàng FMStyle 171 Bà Triêu, Huế
