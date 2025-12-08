@@ -1,6 +1,10 @@
 const express = require('express');
 const cors = require('cors');
 const { poolPromise, sql } = require('./db.config');
+const PDFDocument = require('pdfkit');
+const ExcelJS = require('exceljs');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1715,13 +1719,254 @@ app.delete('/api/chitietphieunhap/:maPN/:maHang', async (req, res) => {
     }
 });
 
+// ================== MAGIAMGIA APIs ==================
+// GET all
+app.get('/api/magiamgia', async (req, res) => {
+    try {
+        const pool = await poolPromise;
+        const result = await pool.request()
+            .query('SELECT maMGG, code, phantramgiam, ngaybatdau, ngayketthuc, trangthai, soluongsudung, gioihan, mota FROM MAGIAMGIA ORDER BY ngaybatdau DESC');
+
+        res.status(200).json({
+            success: true,
+            count: result.recordset.length,
+            data: result.recordset
+        });
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy dữ liệu mã giảm giá',
+            error: err.message
+        });
+    }
+});
+
+// GET by ID
+app.get('/api/magiamgia/:maMGG', async (req, res) => {
+    const { maMGG } = req.params;
+    try {
+        const pool = await poolPromise;
+        const result = await pool.request()
+            .input('maMGG', sql.NVarChar(10), maMGG)
+            .query('SELECT maMGG, code, phantramgiam, ngaybatdau, ngayketthuc, trangthai, soluongsudung, gioihan, mota FROM MAGIAMGIA WHERE maMGG = @maMGG');
+
+        if (result.recordset.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Không tìm thấy mã giảm giá'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: result.recordset[0]
+        });
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi server',
+            error: err.message
+        });
+    }
+});
+
+// GET by code (validate discount code)
+app.get('/api/magiamgia/code/:code', async (req, res) => {
+    const { code } = req.params;
+    try {
+        const pool = await poolPromise;
+        const result = await pool.request()
+            .input('code', sql.NVarChar(20), code)
+            .query(`SELECT maMGG, code, phantramgiam, ngaybatdau, ngayketthuc, trangthai, soluongsudung, gioihan, mota 
+                    FROM MAGIAMGIA 
+                    WHERE code = @code`);
+
+        if (result.recordset.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Mã giảm giá không tồn tại'
+            });
+        }
+
+        const mgg = result.recordset[0];
+        const today = new Date();
+        const ngayBatDau = mgg.ngaybatdau ? new Date(mgg.ngaybatdau) : null;
+        const ngayKetThuc = mgg.ngayketthuc ? new Date(mgg.ngayketthuc) : null;
+
+        // Validate discount code
+        if (mgg.trangthai === false || mgg.trangthai === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Mã giảm giá đã hết hiệu lực'
+            });
+        }
+
+        if (ngayBatDau && today < ngayBatDau) {
+            return res.status(400).json({
+                success: false,
+                message: 'Mã giảm giá chưa có hiệu lực'
+            });
+        }
+
+        if (ngayKetThuc && today > ngayKetThuc) {
+            return res.status(400).json({
+                success: false,
+                message: 'Mã giảm giá đã hết hạn'
+            });
+        }
+
+        if (mgg.gioihan && mgg.soluongsudung >= mgg.gioihan) {
+            return res.status(400).json({
+                success: false,
+                message: 'Mã giảm giá đã hết lượt sử dụng'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: mgg
+        });
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi server',
+            error: err.message
+        });
+    }
+});
+
+// POST
+app.post('/api/magiamgia', async (req, res) => {
+    const { maMGG, code, phantramgiam, ngaybatdau, ngayketthuc, trangthai, gioihan, mota } = req.body;
+    if (!maMGG || !code || phantramgiam === undefined) {
+        return res.status(400).json({
+            success: false,
+            message: 'Thiếu thông tin bắt buộc: maMGG, code, phantramgiam'
+        });
+    }
+    if (phantramgiam < 0 || phantramgiam > 100) {
+        return res.status(400).json({
+            success: false,
+            message: 'Phần trăm giảm giá phải từ 0 đến 100'
+        });
+    }
+    try {
+        const pool = await poolPromise;
+        await pool.request()
+            .input('maMGG', sql.NVarChar(10), maMGG)
+            .input('code', sql.NVarChar(20), code)
+            .input('phantramgiam', sql.Int, phantramgiam)
+            .input('ngaybatdau', sql.Date, ngaybatdau || null)
+            .input('ngayketthuc', sql.Date, ngayketthuc || null)
+            .input('trangthai', sql.Bit, trangthai !== undefined ? trangthai : 1)
+            .input('gioihan', sql.Int, gioihan || null)
+            .input('mota', sql.NVarChar(200), mota || null)
+            .query('INSERT INTO MAGIAMGIA (maMGG, code, phantramgiam, ngaybatdau, ngayketthuc, trangthai, soluongsudung, gioihan, mota) VALUES (@maMGG, @code, @phantramgiam, @ngaybatdau, @ngayketthuc, @trangthai, 0, @gioihan, @mota)');
+
+        res.status(201).json({
+            success: true,
+            message: 'Thêm mã giảm giá thành công',
+            data: { maMGG, code, phantramgiam, ngaybatdau, ngayketthuc, trangthai, gioihan, mota }
+        });
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi thêm mã giảm giá',
+            error: err.message
+        });
+    }
+});
+
+// PUT
+app.put('/api/magiamgia/:maMGG', async (req, res) => {
+    const { maMGG } = req.params;
+    const { code, phantramgiam, ngaybatdau, ngayketthuc, trangthai, gioihan, mota } = req.body;
+    if (!code || phantramgiam === undefined) {
+        return res.status(400).json({
+            success: false,
+            message: 'Thiếu thông tin bắt buộc: code, phantramgiam'
+        });
+    }
+    if (phantramgiam < 0 || phantramgiam > 100) {
+        return res.status(400).json({
+            success: false,
+            message: 'Phần trăm giảm giá phải từ 0 đến 100'
+        });
+    }
+    try {
+        const pool = await poolPromise;
+        const result = await pool.request()
+            .input('maMGG', sql.NVarChar(10), maMGG)
+            .input('code', sql.NVarChar(20), code)
+            .input('phantramgiam', sql.Int, phantramgiam)
+            .input('ngaybatdau', sql.Date, ngaybatdau || null)
+            .input('ngayketthuc', sql.Date, ngayketthuc || null)
+            .input('trangthai', sql.Bit, trangthai !== undefined ? trangthai : 1)
+            .input('gioihan', sql.Int, gioihan || null)
+            .input('mota', sql.NVarChar(200), mota || null)
+            .query('UPDATE MAGIAMGIA SET code = @code, phantramgiam = @phantramgiam, ngaybatdau = @ngaybatdau, ngayketthuc = @ngayketthuc, trangthai = @trangthai, gioihan = @gioihan, mota = @mota WHERE maMGG = @maMGG');
+
+        if (result.rowsAffected[0] === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Không tìm thấy mã giảm giá'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Cập nhật mã giảm giá thành công',
+            data: { maMGG, code, phantramgiam, ngaybatdau, ngayketthuc, trangthai, gioihan, mota }
+        });
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi cập nhật mã giảm giá',
+            error: err.message
+        });
+    }
+});
+
+// DELETE
+app.delete('/api/magiamgia/:maMGG', async (req, res) => {
+    const { maMGG } = req.params;
+    try {
+        const pool = await poolPromise;
+        const result = await pool.request()
+            .input('maMGG', sql.NVarChar(10), maMGG)
+            .query('DELETE FROM MAGIAMGIA WHERE maMGG = @maMGG');
+
+        if (result.rowsAffected[0] === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Không tìm thấy mã giảm giá'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Xóa mã giảm giá thành công'
+        });
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi xóa mã giảm giá',
+            error: err.message
+        });
+    }
+});
+
 // ================== HOADON APIs ==================
 // GET all
 app.get('/api/hoadon', async (req, res) => {
     try {
         const pool = await poolPromise;
         const result = await pool.request()
-            .query('SELECT maHD, maNV, ngaylap, tongtien FROM HOADON ORDER BY ngaylap DESC');
+            .query(`SELECT h.maHD, h.maNV, h.maKH, h.ngaylap, h.tongtien, h.maMGG, h.tiengiamgia, 
+                    mgg.code as codeMGG
+                    FROM HOADON h
+                    LEFT JOIN MAGIAMGIA mgg ON h.maMGG = mgg.maMGG
+                    ORDER BY h.ngaylap DESC`);
 
         res.status(200).json({
             success: true,
@@ -1744,7 +1989,11 @@ app.get('/api/hoadon/:maHD', async (req, res) => {
         const pool = await poolPromise;
         const result = await pool.request()
             .input('maHD', sql.NVarChar(10), maHD)
-            .query('SELECT maHD, maNV, ngaylap, tongtien FROM HOADON WHERE maHD = @maHD');
+            .query(`SELECT h.maHD, h.maNV, h.maKH, h.ngaylap, h.tongtien, h.maMGG, h.tiengiamgia, 
+                    mgg.code as codeMGG
+                    FROM HOADON h
+                    LEFT JOIN MAGIAMGIA mgg ON h.maMGG = mgg.maMGG
+                    WHERE h.maHD = @maHD`);
 
         if (result.recordset.length === 0) {
             return res.status(404).json({
@@ -1768,7 +2017,7 @@ app.get('/api/hoadon/:maHD', async (req, res) => {
 
 // POST
 app.post('/api/hoadon', async (req, res) => {
-    const { maHD, maNV, ngaylap, tongtien } = req.body;
+    const { maHD, maNV, maKH, ngaylap, codeMGG } = req.body;
     if (!maHD || !maNV || !ngaylap) {
         return res.status(400).json({
             success: false,
@@ -1777,17 +2026,71 @@ app.post('/api/hoadon', async (req, res) => {
     }
     try {
         const pool = await poolPromise;
+        let maMGG = null;
+        let tiengiamgia = 0;
+
+        // Validate and get discount code if provided
+        if (codeMGG) {
+            const mggResult = await pool.request()
+                .input('code', sql.NVarChar(20), codeMGG)
+                .query(`SELECT maMGG, phantramgiam, ngaybatdau, ngayketthuc, trangthai, soluongsudung, gioihan 
+                        FROM MAGIAMGIA 
+                        WHERE code = @code AND trangthai = 1`);
+            
+            if (mggResult.recordset.length > 0) {
+                const mgg = mggResult.recordset[0];
+                const today = new Date();
+                const ngayBatDau = mgg.ngaybatdau ? new Date(mgg.ngaybatdau) : null;
+                const ngayKetThuc = mgg.ngayketthuc ? new Date(mgg.ngayketthuc) : null;
+
+                // Validate discount code dates and usage limit
+                if (ngayBatDau && today < ngayBatDau) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Mã giảm giá chưa có hiệu lực'
+                    });
+                }
+
+                if (ngayKetThuc && today > ngayKetThuc) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Mã giảm giá đã hết hạn'
+                    });
+                }
+
+                if (mgg.gioihan && mgg.soluongsudung >= mgg.gioihan) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Mã giảm giá đã hết lượt sử dụng'
+                    });
+                }
+
+                maMGG = mgg.maMGG;
+            } else {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Mã giảm giá không hợp lệ hoặc đã hết hiệu lực'
+                });
+            }
+        }
+
+        // Initial total is 0, will be recalculated when details are added
+        const tongtien = 0;
+
         await pool.request()
             .input('maHD', sql.NVarChar(10), maHD)
             .input('maNV', sql.NVarChar(10), maNV)
+            .input('maKH', sql.NVarChar(10), maKH || null)
             .input('ngaylap', sql.Date, ngaylap)
-            .input('tongtien', sql.Decimal(18, 2), tongtien || null)
-            .query('INSERT INTO HOADON (maHD, maNV, ngaylap, tongtien) VALUES (@maHD, @maNV, @ngaylap, @tongtien)');
+            .input('tongtien', sql.Decimal(18, 2), tongtien)
+            .input('maMGG', sql.NVarChar(10), maMGG)
+            .input('tiengiamgia', sql.Decimal(18, 2), tiengiamgia)
+            .query('INSERT INTO HOADON (maHD, maNV, maKH, ngaylap, tongtien, maMGG, tiengiamgia) VALUES (@maHD, @maNV, @maKH, @ngaylap, @tongtien, @maMGG, @tiengiamgia)');
 
         res.status(201).json({
             success: true,
             message: 'Thêm hóa đơn thành công',
-            data: { maHD, maNV, ngaylap, tongtien }
+            data: { maHD, maNV, maKH, ngaylap, tongtien, maMGG, tiengiamgia }
         });
     } catch (err) {
         res.status(500).json({
@@ -1801,7 +2104,7 @@ app.post('/api/hoadon', async (req, res) => {
 // PUT
 app.put('/api/hoadon/:maHD', async (req, res) => {
     const { maHD } = req.params;
-    const { maNV, ngaylap, tongtien } = req.body;
+    const { maNV, maKH, ngaylap, codeMGG } = req.body;
     if (!maNV || !ngaylap) {
         return res.status(400).json({
             success: false,
@@ -1810,12 +2113,90 @@ app.put('/api/hoadon/:maHD', async (req, res) => {
     }
     try {
         const pool = await poolPromise;
+        
+        // Get current invoice to check old discount code
+        const currentResult = await pool.request()
+            .input('maHD', sql.NVarChar(10), maHD)
+            .query('SELECT maMGG FROM HOADON WHERE maHD = @maHD');
+        
+        const oldMaMGG = currentResult.recordset.length > 0 ? currentResult.recordset[0].maMGG : null;
+        
+        let maMGG = null;
+
+        // Validate and get discount code if provided
+        if (codeMGG) {
+            const mggResult = await pool.request()
+                .input('code', sql.NVarChar(20), codeMGG)
+                .query(`SELECT maMGG, phantramgiam, ngaybatdau, ngayketthuc, trangthai, soluongsudung, gioihan 
+                        FROM MAGIAMGIA 
+                        WHERE code = @code AND trangthai = 1`);
+            
+            if (mggResult.recordset.length > 0) {
+                const mgg = mggResult.recordset[0];
+                const today = new Date();
+                const ngayBatDau = mgg.ngaybatdau ? new Date(mgg.ngaybatdau) : null;
+                const ngayKetThuc = mgg.ngayketthuc ? new Date(mgg.ngayketthuc) : null;
+
+                // Validate discount code dates and usage limit
+                if (ngayBatDau && today < ngayBatDau) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Mã giảm giá chưa có hiệu lực'
+                    });
+                }
+
+                if (ngayKetThuc && today > ngayKetThuc) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Mã giảm giá đã hết hạn'
+                    });
+                }
+
+                if (mgg.gioihan && mgg.soluongsudung >= mgg.gioihan) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Mã giảm giá đã hết lượt sử dụng'
+                    });
+                }
+
+                maMGG = mgg.maMGG;
+            } else {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Mã giảm giá không hợp lệ hoặc đã hết hiệu lực'
+                });
+            }
+        }
+
+        // Calculate total from invoice details
+        const totalResult = await pool.request()
+            .input('maHD', sql.NVarChar(10), maHD)
+            .query('SELECT SUM(tongtien) as tongtien FROM CHITIET_HD WHERE maHD = @maHD');
+        
+        const tongtien = totalResult.recordset[0].tongtien || 0;
+        
+        // Calculate discount amount
+        let tiengiamgia = 0;
+        if (maMGG && tongtien > 0) {
+            const mggResult = await pool.request()
+                .input('maMGG', sql.NVarChar(10), maMGG)
+                .query('SELECT phantramgiam FROM MAGIAMGIA WHERE maMGG = @maMGG');
+            
+            if (mggResult.recordset.length > 0) {
+                const phantramgiam = mggResult.recordset[0].phantramgiam;
+                tiengiamgia = (tongtien * phantramgiam) / 100;
+            }
+        }
+
         const result = await pool.request()
             .input('maHD', sql.NVarChar(10), maHD)
             .input('maNV', sql.NVarChar(10), maNV)
+            .input('maKH', sql.NVarChar(10), maKH || null)
             .input('ngaylap', sql.Date, ngaylap)
-            .input('tongtien', sql.Decimal(18, 2), tongtien || null)
-            .query('UPDATE HOADON SET maNV = @maNV, ngaylap = @ngaylap, tongtien = @tongtien WHERE maHD = @maHD');
+            .input('tongtien', sql.Decimal(18, 2), tongtien)
+            .input('maMGG', sql.NVarChar(10), maMGG)
+            .input('tiengiamgia', sql.Decimal(18, 2), tiengiamgia)
+            .query('UPDATE HOADON SET maNV = @maNV, maKH = @maKH, ngaylap = @ngaylap, tongtien = @tongtien, maMGG = @maMGG, tiengiamgia = @tiengiamgia WHERE maHD = @maHD');
 
         if (result.rowsAffected[0] === 0) {
             return res.status(404).json({
@@ -1824,10 +2205,17 @@ app.put('/api/hoadon/:maHD', async (req, res) => {
             });
         }
 
+        // Update discount code usage count if changed
+        if (maMGG && maMGG !== oldMaMGG) {
+            await pool.request()
+                .input('maMGG', sql.NVarChar(10), maMGG)
+                .query('UPDATE MAGIAMGIA SET soluongsudung = soluongsudung + 1 WHERE maMGG = @maMGG');
+        }
+
         res.status(200).json({
             success: true,
             message: 'Cập nhật hóa đơn thành công',
-            data: { maHD, maNV, ngaylap, tongtien }
+            data: { maHD, maNV, maKH, ngaylap, tongtien, maMGG, tiengiamgia }
         });
     } catch (err) {
         res.status(500).json({
@@ -1873,7 +2261,7 @@ app.get('/api/chitiethd', async (req, res) => {
     try {
         const pool = await poolPromise;
         const result = await pool.request()
-            .query('SELECT maHD, maHang, soluong, dongia, chietkhau, tongtien FROM CHITIET_HD');
+            .query('SELECT maHD, maHang, soluong, dongia, tongtien FROM CHITIET_HD');
 
         res.status(200).json({
             success: true,
@@ -1897,7 +2285,7 @@ app.get('/api/chitiethd/:maHD/:maHang', async (req, res) => {
         const result = await pool.request()
             .input('maHD', sql.NVarChar(10), maHD)
             .input('maHang', sql.NVarChar(10), maHang)
-            .query('SELECT maHD, maHang, soluong, dongia, chietkhau, tongtien FROM CHITIET_HD WHERE maHD = @maHD AND maHang = @maHang');
+            .query('SELECT maHD, maHang, soluong, dongia, tongtien FROM CHITIET_HD WHERE maHD = @maHD AND maHang = @maHang');
 
         if (result.recordset.length === 0) {
             return res.status(404).json({
@@ -1926,7 +2314,7 @@ app.get('/api/chitiethd/:maHD', async (req, res) => {
         const pool = await poolPromise;
         const result = await pool.request()
             .input('maHD', sql.NVarChar(10), maHD)
-            .query('SELECT maHD, maHang, soluong, dongia, chietkhau, tongtien FROM CHITIET_HD WHERE maHD = @maHD');
+            .query('SELECT maHD, maHang, soluong, dongia, tongtien FROM CHITIET_HD WHERE maHD = @maHD');
 
         res.status(200).json({
             success: true,
@@ -1944,7 +2332,7 @@ app.get('/api/chitiethd/:maHD', async (req, res) => {
 
 // POST
 app.post('/api/chitiethd', async (req, res) => {
-    const { maHD, maHang, soluong, dongia, chietkhau, tongtien } = req.body;
+    const { maHD, maHang, soluong, dongia } = req.body;
     if (!maHD || !maHang || soluong === undefined || dongia === undefined) {
         return res.status(400).json({
             success: false,
@@ -1953,19 +2341,24 @@ app.post('/api/chitiethd', async (req, res) => {
     }
     try {
         const pool = await poolPromise;
+        // Calculate tongtien = soluong * dongia
+        const tongtien = soluong * dongia;
+        
         await pool.request()
             .input('maHD', sql.NVarChar(10), maHD)
             .input('maHang', sql.NVarChar(10), maHang)
             .input('soluong', sql.Int, soluong)
             .input('dongia', sql.Decimal(18, 2), dongia)
-            .input('chietkhau', sql.Int, chietkhau || null)
-            .input('tongtien', sql.Decimal(18, 2), tongtien || null)
-            .query('INSERT INTO CHITIET_HD (maHD, maHang, soluong, dongia, chietkhau, tongtien) VALUES (@maHD, @maHang, @soluong, @dongia, @chietkhau, @tongtien)');
+            .input('tongtien', sql.Decimal(18, 2), tongtien)
+            .query('INSERT INTO CHITIET_HD (maHD, maHang, soluong, dongia, tongtien) VALUES (@maHD, @maHang, @soluong, @dongia, @tongtien)');
+
+        // Recalculate invoice total and apply discount
+        await recalculateInvoiceTotal(maHD);
 
         res.status(201).json({
             success: true,
             message: 'Thêm chi tiết hóa đơn thành công',
-            data: { maHD, maHang, soluong, dongia, chietkhau, tongtien }
+            data: { maHD, maHang, soluong, dongia, tongtien }
         });
     } catch (err) {
         res.status(500).json({
@@ -1979,7 +2372,7 @@ app.post('/api/chitiethd', async (req, res) => {
 // PUT
 app.put('/api/chitiethd/:maHD/:maHang', async (req, res) => {
     const { maHD, maHang } = req.params;
-    const { soluong, dongia, chietkhau, tongtien } = req.body;
+    const { soluong, dongia } = req.body;
     if (soluong === undefined || dongia === undefined) {
         return res.status(400).json({
             success: false,
@@ -1988,14 +2381,16 @@ app.put('/api/chitiethd/:maHD/:maHang', async (req, res) => {
     }
     try {
         const pool = await poolPromise;
+        // Calculate tongtien = soluong * dongia
+        const tongtien = soluong * dongia;
+        
         const result = await pool.request()
             .input('maHD', sql.NVarChar(10), maHD)
             .input('maHang', sql.NVarChar(10), maHang)
             .input('soluong', sql.Int, soluong)
             .input('dongia', sql.Decimal(18, 2), dongia)
-            .input('chietkhau', sql.Int, chietkhau || null)
-            .input('tongtien', sql.Decimal(18, 2), tongtien || null)
-            .query('UPDATE CHITIET_HD SET soluong = @soluong, dongia = @dongia, chietkhau = @chietkhau, tongtien = @tongtien WHERE maHD = @maHD AND maHang = @maHang');
+            .input('tongtien', sql.Decimal(18, 2), tongtien)
+            .query('UPDATE CHITIET_HD SET soluong = @soluong, dongia = @dongia, tongtien = @tongtien WHERE maHD = @maHD AND maHang = @maHang');
 
         if (result.rowsAffected[0] === 0) {
             return res.status(404).json({
@@ -2004,10 +2399,13 @@ app.put('/api/chitiethd/:maHD/:maHang', async (req, res) => {
             });
         }
 
+        // Recalculate invoice total and apply discount
+        await recalculateInvoiceTotal(maHD);
+
         res.status(200).json({
             success: true,
             message: 'Cập nhật chi tiết hóa đơn thành công',
-            data: { maHD, maHang, soluong, dongia, chietkhau, tongtien }
+            data: { maHD, maHang, soluong, dongia, tongtien }
         });
     } catch (err) {
         res.status(500).json({
@@ -2035,6 +2433,9 @@ app.delete('/api/chitiethd/:maHD/:maHang', async (req, res) => {
             });
         }
 
+        // Recalculate invoice total and apply discount
+        await recalculateInvoiceTotal(maHD);
+
         res.status(200).json({
             success: true,
             message: 'Xóa chi tiết hóa đơn thành công'
@@ -2043,6 +2444,586 @@ app.delete('/api/chitiethd/:maHD/:maHang', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Lỗi khi xóa chi tiết hóa đơn',
+            error: err.message
+        });
+    }
+});
+
+// Helper function to recalculate invoice total and apply discount
+async function recalculateInvoiceTotal(maHD) {
+    const pool = await poolPromise;
+    
+    // Calculate total from invoice details
+    const totalResult = await pool.request()
+        .input('maHD', sql.NVarChar(10), maHD)
+        .query('SELECT SUM(tongtien) as tongtien FROM CHITIET_HD WHERE maHD = @maHD');
+    
+    const tongtien = totalResult.recordset[0].tongtien || 0;
+    
+    // Get invoice discount code
+    const invoiceResult = await pool.request()
+        .input('maHD', sql.NVarChar(10), maHD)
+        .query('SELECT maMGG FROM HOADON WHERE maHD = @maHD');
+    
+    let tiengiamgia = 0;
+    if (invoiceResult.recordset.length > 0 && invoiceResult.recordset[0].maMGG) {
+        const maMGG = invoiceResult.recordset[0].maMGG;
+        const mggResult = await pool.request()
+            .input('maMGG', sql.NVarChar(10), maMGG)
+            .query('SELECT phantramgiam FROM MAGIAMGIA WHERE maMGG = @maMGG');
+        
+        if (mggResult.recordset.length > 0) {
+            const phantramgiam = mggResult.recordset[0].phantramgiam;
+            tiengiamgia = (tongtien * phantramgiam) / 100;
+        }
+    }
+    
+    // Update invoice total and discount
+    await pool.request()
+        .input('maHD', sql.NVarChar(10), maHD)
+        .input('tongtien', sql.Decimal(18, 2), tongtien)
+        .input('tiengiamgia', sql.Decimal(18, 2), tiengiamgia)
+        .query('UPDATE HOADON SET tongtien = @tongtien, tiengiamgia = @tiengiamgia WHERE maHD = @maHD');
+}
+
+// ================== INVOICE DETAIL API ==================
+// Get full invoice details with all information
+app.get('/api/hoadon/:maHD/export', async (req, res) => {
+    const { maHD } = req.params;
+    const { format } = req.query; // 'json' or 'excel'
+    
+    try {
+        const pool = await poolPromise;
+        
+        // Get invoice data with all related information
+        const invoiceResult = await pool.request()
+            .input('maHD', sql.NVarChar(10), maHD)
+            .query(`SELECT h.maHD, h.ngaylap, h.tongtien, h.maMGG, h.tiengiamgia,
+                    nv.maNV, nv.tenNV as tenNhanVien,
+                    kh.maKH, kh.tenKH as tenKhachHang, kh.diachi, kh.sdt,
+                    mgg.maMGG, mgg.code as codeMGG, mgg.phantramgiam, mgg.mota as motaMGG
+                    FROM HOADON h
+                    LEFT JOIN NHANVIEN nv ON h.maNV = nv.maNV
+                    LEFT JOIN KHACHHANG kh ON h.maKH = kh.maKH
+                    LEFT JOIN MAGIAMGIA mgg ON h.maMGG = mgg.maMGG
+                    WHERE h.maHD = @maHD`);
+        
+        if (invoiceResult.recordset.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Không tìm thấy hóa đơn'
+            });
+        }
+        
+        const invoice = invoiceResult.recordset[0];
+        
+        // Get invoice details with product information
+        const detailsResult = await pool.request()
+            .input('maHD', sql.NVarChar(10), maHD)
+            .query(`SELECT cthd.maHang, cthd.soluong, cthd.dongia, cthd.tongtien,
+                    hh.loaihang as tenHang, hh.donvi, hh.giabanra
+                    FROM CHITIET_HD cthd
+                    INNER JOIN HANGHOA hh ON cthd.maHang = hh.maHang
+                    WHERE cthd.maHD = @maHD
+                    ORDER BY cthd.maHang`);
+        
+        const details = detailsResult.recordset;
+        
+        // Calculate final amount
+        const tongTien = parseFloat(invoice.tongtien) || 0;
+        const tienGiamGia = parseFloat(invoice.tiengiamgia) || 0;
+        const thanhTien = tongTien - tienGiamGia;
+        
+        // Prepare response data
+        const invoiceData = {
+            thongTinHoaDon: {
+                maHD: invoice.maHD,
+                ngaylap: invoice.ngaylap,
+                nhanVien: {
+                    maNV: invoice.maNV,
+                    tenNV: invoice.tenNhanVien
+                },
+                khachHang: invoice.maKH ? {
+                    maKH: invoice.maKH,
+                    tenKH: invoice.tenKhachHang,
+                    diachi: invoice.diachi,
+                    sdt: invoice.sdt
+                } : null,
+                maGiamGia: invoice.codeMGG ? {
+                    code: invoice.codeMGG,
+                    phantramgiam: invoice.phantramgiam,
+                    mota: invoice.motaMGG
+                } : null,
+                tongTien: tongTien,
+                tienGiamGia: tienGiamGia,
+                thanhTien: thanhTien
+            },
+            chiTietHangHoa: details.map((item, index) => ({
+                stt: index + 1,
+                maHang: item.maHang,
+                tenHang: item.tenHang,
+                donvi: item.donvi,
+                soluong: item.soluong,
+                dongia: parseFloat(item.dongia),
+                tongtien: parseFloat(item.tongtien)
+            }))
+        };
+        
+        // Return JSON or Excel based on format parameter
+        if (format === 'excel') {
+            // Create Excel file
+            const workbook = new ExcelJS.Workbook();
+            const worksheet = workbook.addWorksheet('Hóa Đơn');
+            
+            // Set column widths
+            worksheet.columns = [
+                { width: 10 }, // STT
+                { width: 15 }, // Mã hàng
+                { width: 30 }, // Tên hàng
+                { width: 10 }, // Đơn vị
+                { width: 12 }, // Số lượng
+                { width: 15 }, // Đơn giá
+                { width: 15 }  // Thành tiền
+            ];
+            
+            // Header row
+            worksheet.mergeCells('A1:G1');
+            worksheet.getCell('A1').value = 'HÓA ĐƠN BÁN HÀNG';
+            worksheet.getCell('A1').font = { size: 16, bold: true };
+            worksheet.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
+            
+            // Invoice info
+            worksheet.mergeCells('A2:G2');
+            worksheet.getCell('A2').value = `Mã hóa đơn: ${invoice.maHD} | Ngày lập: ${new Date(invoice.ngaylap).toLocaleDateString('vi-VN')}`;
+            worksheet.getCell('A2').alignment = { horizontal: 'center' };
+            
+            // Customer info
+            if (invoice.tenKhachHang) {
+                worksheet.mergeCells('A3:G3');
+                worksheet.getCell('A3').value = `Khách hàng: ${invoice.tenKhachHang}${invoice.diachi ? ' | Địa chỉ: ' + invoice.diachi : ''}${invoice.sdt ? ' | SĐT: ' + invoice.sdt : ''}`;
+            }
+            
+            // Staff info
+            worksheet.mergeCells('A4:G4');
+            worksheet.getCell('A4').value = `Nhân viên: ${invoice.tenNhanVien || 'N/A'}`;
+            
+            // Discount code
+            if (invoice.codeMGG) {
+                worksheet.mergeCells('A5:G5');
+                worksheet.getCell('A5').value = `Mã giảm giá: ${invoice.codeMGG} (${invoice.phantramgiam}%)${invoice.motaMGG ? ' - ' + invoice.motaMGG : ''}`;
+                worksheet.getCell('A5').font = { color: { argb: 'FF0066CC' } };
+            }
+            
+            // Empty row
+            worksheet.getRow(6).height = 5;
+            
+            // Table header
+            const headerRow = worksheet.getRow(7);
+            headerRow.values = ['STT', 'Mã hàng', 'Tên hàng', 'Đơn vị', 'Số lượng', 'Đơn giá', 'Thành tiền'];
+            headerRow.font = { bold: true };
+            headerRow.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FF667EEA' }
+            };
+            headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
+            headerRow.height = 25;
+            
+            // Data rows
+            details.forEach((item, index) => {
+                const row = worksheet.getRow(8 + index);
+                row.values = [
+                    index + 1,
+                    item.maHang,
+                    item.tenHang,
+                    item.donvi || '',
+                    item.soluong,
+                    parseFloat(item.dongia).toLocaleString('vi-VN'),
+                    parseFloat(item.tongtien).toLocaleString('vi-VN')
+                ];
+                row.getCell(6).numFmt = '#,##0';
+                row.getCell(7).numFmt = '#,##0';
+            });
+            
+            // Summary row
+            const summaryRowIndex = 8 + details.length;
+            worksheet.mergeCells(`A${summaryRowIndex}:E${summaryRowIndex}`);
+            worksheet.getCell(`A${summaryRowIndex}`).value = 'Tổng tiền:';
+            worksheet.getCell(`A${summaryRowIndex}`).font = { bold: true };
+            worksheet.getCell(`F${summaryRowIndex}`).value = tongTien.toLocaleString('vi-VN');
+            worksheet.getCell(`F${summaryRowIndex}`).numFmt = '#,##0';
+            worksheet.getCell(`F${summaryRowIndex}`).font = { bold: true };
+            
+            if (tienGiamGia > 0) {
+                const discountRowIndex = summaryRowIndex + 1;
+                worksheet.mergeCells(`A${discountRowIndex}:E${discountRowIndex}`);
+                worksheet.getCell(`A${discountRowIndex}`).value = 'Tiền giảm giá:';
+                worksheet.getCell(`F${discountRowIndex}`).value = '-' + tienGiamGia.toLocaleString('vi-VN');
+                worksheet.getCell(`F${discountRowIndex}`).numFmt = '#,##0';
+                worksheet.getCell(`F${discountRowIndex}`).font = { color: { argb: 'FFCC0000' } };
+            }
+            
+            const finalRowIndex = tienGiamGia > 0 ? summaryRowIndex + 2 : summaryRowIndex + 1;
+            worksheet.mergeCells(`A${finalRowIndex}:E${finalRowIndex}`);
+            worksheet.getCell(`A${finalRowIndex}`).value = 'Thành tiền:';
+            worksheet.getCell(`A${finalRowIndex}`).font = { size: 12, bold: true };
+            worksheet.getCell(`F${finalRowIndex}`).value = thanhTien.toLocaleString('vi-VN');
+            worksheet.getCell(`F${finalRowIndex}`).numFmt = '#,##0';
+            worksheet.getCell(`F${finalRowIndex}`).font = { size: 12, bold: true };
+            
+            // Footer
+            worksheet.mergeCells(`A${finalRowIndex + 2}:G${finalRowIndex + 2}`);
+            worksheet.getCell(`A${finalRowIndex + 2}`).value = 'Cảm ơn quý khách đã sử dụng dịch vụ!';
+            worksheet.getCell(`A${finalRowIndex + 2}`).alignment = { horizontal: 'center' };
+            worksheet.getCell(`A${finalRowIndex + 2}`).font = { italic: true };
+            
+            // Set response headers
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.setHeader('Content-Disposition', `attachment; filename="HoaDon_${maHD}.xlsx"`);
+            
+            // Write to response
+            await workbook.xlsx.write(res);
+            res.end();
+        } else {
+            // Return JSON
+            res.status(200).json({
+                success: true,
+                data: invoiceData
+            });
+        }
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi xuất hóa đơn',
+            error: err.message
+        });
+    }
+});
+
+// ================== PDF EXPORT API ==================
+// Export invoice to PDF
+app.get('/api/hoadon/:maHD/pdf', async (req, res) => {
+    const { maHD } = req.params;
+    try {
+        const pool = await poolPromise;
+        
+        // Get invoice data
+        const invoiceResult = await pool.request()
+            .input('maHD', sql.NVarChar(10), maHD)
+            .query(`SELECT h.maHD, h.ngaylap, h.tongtien, h.maMGG, h.tiengiamgia,
+                    nv.tenNV, kh.tenKH, kh.diachi, kh.sdt,
+                    mgg.code as codeMGG, mgg.phantramgiam
+                    FROM HOADON h
+                    LEFT JOIN NHANVIEN nv ON h.maNV = nv.maNV
+                    LEFT JOIN KHACHHANG kh ON h.maKH = kh.maKH
+                    LEFT JOIN MAGIAMGIA mgg ON h.maMGG = mgg.maMGG
+                    WHERE h.maHD = @maHD`);
+        
+        if (invoiceResult.recordset.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Không tìm thấy hóa đơn'
+            });
+        }
+        
+        const invoice = invoiceResult.recordset[0];
+        
+        // Get invoice details
+        const detailsResult = await pool.request()
+            .input('maHD', sql.NVarChar(10), maHD)
+            .query(`SELECT cthd.maHang, cthd.soluong, cthd.dongia, cthd.tongtien,
+                    hh.loaihang, hh.donvi
+                    FROM CHITIET_HD cthd
+                    INNER JOIN HANGHOA hh ON cthd.maHang = hh.maHang
+                    WHERE cthd.maHD = @maHD
+                    ORDER BY cthd.maHang`);
+        
+        const details = detailsResult.recordset;
+        
+        // Create PDF with A4 portrait (dọc) - 595.28 x 841.89 points
+        const doc = new PDFDocument({ 
+            margin: 50,
+            size: [595.28, 841.89], // A4 portrait (width x height in points)
+            layout: 'portrait',
+            info: {
+                Title: `Hoa Don ${maHD}`,
+                Author: 'FMSTYLE',
+                Subject: 'Hoa don ban hang'
+            }
+        });
+        
+        // Try to register Vietnamese font if available
+        // Font files should be placed in a 'fonts' folder in the project root
+        const fontsDir = path.join(__dirname, 'fonts');
+        let vietnameseFont = 'Times-Roman'; // Default fallback
+        let vietnameseFontBold = 'Times-Bold';
+        
+        // Check for common Vietnamese fonts
+        const fontFiles = {
+            'NotoSans-Regular.ttf': 'NotoSans',
+            'NotoSans-Bold.ttf': 'NotoSansBold',
+            'Arial-Unicode-MS.ttf': 'ArialUnicode',
+            'Times-New-Roman.ttf': 'TimesNewRoman'
+        };
+        
+        for (const [filename, fontName] of Object.entries(fontFiles)) {
+            const fontPath = path.join(fontsDir, filename);
+            if (fs.existsSync(fontPath)) {
+                try {
+                    doc.registerFont(fontName, fontPath);
+                    if (filename.includes('Regular') || filename.includes('Arial') || filename.includes('Times-New')) {
+                        vietnameseFont = fontName;
+                    }
+                    if (filename.includes('Bold')) {
+                        vietnameseFontBold = fontName;
+                    }
+                } catch (e) {
+                    console.log(`Could not register font ${filename}:`, e.message);
+                }
+            }
+        }
+        
+        // Set response headers
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="HoaDon_${maHD}.pdf"`);
+        
+        // Pipe PDF to response
+        doc.pipe(res);
+        
+        // Helper function to safely get text (handle null/undefined and encoding)
+        const safeText = (text) => {
+            if (text === null || text === undefined) return '';
+            // Convert to string and ensure proper encoding for Vietnamese characters
+            let str = String(text);
+            // Ensure UTF-8 encoding for Vietnamese characters
+            // PDFKit should handle UTF-8 properly, but we ensure it's a proper string
+            try {
+                // Normalize the string to ensure proper encoding
+                return str.normalize('NFC');
+            } catch (e) {
+                return str;
+            }
+        };
+        
+        // Helper function to format currency
+        const formatCurrency = (amount) => {
+            return parseFloat(amount || 0).toLocaleString('vi-VN') + ' đ';
+        };
+        
+        // Helper function to format date
+        const formatDate = (date) => {
+            if (!date) return '';
+            const d = new Date(date);
+            return d.toLocaleDateString('vi-VN', { 
+                year: 'numeric', 
+                month: '2-digit', 
+                day: '2-digit' 
+            });
+        };
+        
+        // Title - Use Vietnamese font
+        doc.fontSize(24)
+           .font(vietnameseFontBold)
+           .fillColor('#1e3c72')
+           .text('HÓA ĐƠN BÁN HÀNG', { align: 'center' });
+        doc.moveDown(0.5);
+        
+        // Draw separator line (adjusted for A4 portrait width: 595.28 - 100 margins = ~495)
+        doc.moveTo(50, doc.y)
+           .lineTo(495, doc.y)
+           .lineWidth(2)
+           .strokeColor('#667eea')
+           .stroke();
+        doc.moveDown(1);
+        
+        // Invoice info section - Use Vietnamese font
+        doc.fontSize(11)
+           .font(vietnameseFont)
+           .fillColor('#333333');
+        
+        const infoStartY = doc.y;
+        doc.text('Mã hóa đơn:', 50, infoStartY);
+        doc.font(vietnameseFontBold).text(safeText(invoice.maHD), 150, infoStartY);
+        
+        doc.font(vietnameseFont).text('Ngày lập:', 350, infoStartY);
+        doc.text(formatDate(invoice.ngaylap), 420, infoStartY);
+        doc.moveDown(1);
+        
+        // Customer info
+        if (invoice.tenKH) {
+            doc.font(vietnameseFont).text('Khách hàng:', 50);
+            doc.font(vietnameseFontBold).text(safeText(invoice.tenKH), 150, doc.y - 15);
+            
+            if (invoice.diachi) {
+                doc.font(vietnameseFont).text('Địa chỉ:', 50);
+                doc.text(safeText(invoice.diachi), 150, doc.y - 15);
+            }
+            
+            if (invoice.sdt) {
+                doc.font(vietnameseFont).text('SĐT:', 50);
+                doc.text(safeText(invoice.sdt), 150, doc.y - 15);
+            }
+            doc.moveDown(0.8);
+        }
+        
+        // Staff info
+        doc.font(vietnameseFont).text('Nhân viên:', 50);
+        doc.font(vietnameseFontBold).text(safeText(invoice.tenNV || 'N/A'), 150, doc.y - 15);
+        doc.moveDown(0.8);
+        
+        // Discount code
+        if (invoice.codeMGG) {
+            doc.font(vietnameseFont)
+               .fillColor('#0066cc')
+               .text(`Mã giảm giá: ${safeText(invoice.codeMGG)} (${invoice.phantramgiam}%)`, 50);
+            doc.fillColor('#333333');
+            doc.moveDown(0.8);
+        }
+        
+        doc.moveDown(0.5);
+        
+        // Table section (adjusted for A4 portrait: 595.28 - 100 margins = 495.28)
+        const tableTop = doc.y;
+        const tableLeft = 50;
+        const tableWidth = 445; // Reduced width for portrait
+        const colWidths = [30, 70, 150, 50, 45, 70, 80]; // STT, Mã, Tên, ĐV, SL, Đơn giá, Thành tiền
+        const colPositions = [tableLeft];
+        for (let i = 1; i < colWidths.length; i++) {
+            colPositions[i] = colPositions[i - 1] + colWidths[i - 1];
+        }
+        
+        // Table header background
+        doc.rect(tableLeft, tableTop, tableWidth, 25)
+           .fillColor('#667eea')
+           .fill();
+        
+        // Table header text - Use Vietnamese font
+        doc.fontSize(10)
+           .font(vietnameseFontBold)
+           .fillColor('#FFFFFF')
+           .text('STT', colPositions[0] + 5, tableTop + 8)
+           .text('Mã hàng', colPositions[1] + 5, tableTop + 8)
+           .text('Tên hàng', colPositions[2] + 5, tableTop + 8)
+           .text('ĐV', colPositions[3] + 5, tableTop + 8)
+           .text('SL', colPositions[4] + 5, tableTop + 8)
+           .text('Đơn giá', colPositions[5], tableTop + 8, { width: colWidths[5] - 10, align: 'right' })
+           .text('Thành tiền', colPositions[6], tableTop + 8, { width: colWidths[6] - 10, align: 'right' });
+        
+        // Table rows
+        let yPos = tableTop + 30;
+        let stt = 1;
+        doc.fontSize(9)
+           .font(vietnameseFont)
+           .fillColor('#333333');
+        
+        details.forEach((item, index) => {
+            // Check if need new page
+            if (yPos > 700) {
+                doc.addPage();
+                yPos = 50;
+                
+                // Redraw header on new page
+                doc.rect(tableLeft, yPos - 25, tableWidth, 25)
+                   .fillColor('#667eea')
+                   .fill();
+                doc.fontSize(10)
+                   .font(vietnameseFontBold)
+                   .fillColor('#FFFFFF')
+                   .text('STT', colPositions[0] + 5, yPos - 17)
+                   .text('Mã hàng', colPositions[1] + 5, yPos - 17)
+                   .text('Tên hàng', colPositions[2] + 5, yPos - 17)
+                   .text('ĐV', colPositions[3] + 5, yPos - 17)
+                   .text('SL', colPositions[4] + 5, yPos - 17)
+                   .text('Đơn giá', colPositions[5], yPos - 17, { width: colWidths[5] - 10, align: 'right' })
+                   .text('Thành tiền', colPositions[6], yPos - 17, { width: colWidths[6] - 10, align: 'right' });
+                yPos += 5;
+            }
+            
+            // Alternate row background
+            if (index % 2 === 0) {
+                doc.rect(tableLeft, yPos - 3, tableWidth, 18)
+                   .fillColor('#f8f9fa')
+                   .fill();
+            }
+            
+            // Row data
+            doc.fillColor('#333333')
+               .text(stt.toString(), colPositions[0] + 5, yPos)
+               .text(safeText(item.maHang), colPositions[1] + 5, yPos, { width: colWidths[1] - 10 })
+               .text(safeText(item.loaihang || ''), colPositions[2] + 5, yPos, { width: colWidths[2] - 10 })
+               .text(safeText(item.donvi || ''), colPositions[3] + 5, yPos, { width: colWidths[3] - 10 })
+               .text(safeText(item.soluong.toString()), colPositions[4] + 5, yPos, { width: colWidths[4] - 10, align: 'center' })
+               .text(formatCurrency(item.dongia), colPositions[5], yPos, { width: colWidths[5] - 10, align: 'right' })
+               .text(formatCurrency(item.tongtien), colPositions[6], yPos, { width: colWidths[6] - 10, align: 'right' });
+            
+            yPos += 20;
+            stt++;
+        });
+        
+        // Draw table border
+        doc.rect(tableLeft, tableTop, tableWidth, yPos - tableTop - 5)
+           .lineWidth(1)
+           .strokeColor('#cccccc')
+           .stroke();
+        
+        // Summary section (adjusted for portrait)
+        const summaryY = yPos + 15;
+        const tongTien = parseFloat(invoice.tongtien) || 0;
+        const tienGiamGia = parseFloat(invoice.tiengiamgia) || 0;
+        const thanhTien = tongTien - tienGiamGia;
+        
+        doc.fontSize(11)
+           .font(vietnameseFont)
+           .fillColor('#333333');
+        
+        // Summary box (adjusted position for portrait)
+        const summaryBoxLeft = 300;
+        const summaryBoxWidth = 195;
+        const summaryBoxTop = summaryY;
+        const summaryBoxHeight = tienGiamGia > 0 ? 70 : 50;
+        
+        doc.rect(summaryBoxLeft, summaryBoxTop, summaryBoxWidth, summaryBoxHeight)
+           .fillColor('#f0f0f0')
+           .fill()
+           .lineWidth(1)
+           .strokeColor('#cccccc')
+           .stroke();
+        
+        let currentSummaryY = summaryBoxTop + 10;
+        
+        doc.text('Tổng tiền:', summaryBoxLeft + 10, currentSummaryY);
+        doc.font(vietnameseFontBold)
+           .text(formatCurrency(tongTien), summaryBoxLeft + 100, currentSummaryY, { width: 85, align: 'right' });
+        
+        if (tienGiamGia > 0) {
+            currentSummaryY += 20;
+            doc.font(vietnameseFont)
+               .fillColor('#cc0000')
+               .text('Tiền giảm giá:', summaryBoxLeft + 10, currentSummaryY);
+            doc.text('-' + formatCurrency(tienGiamGia), summaryBoxLeft + 100, currentSummaryY, { width: 85, align: 'right' });
+        }
+        
+        currentSummaryY += 20;
+        doc.font(vietnameseFontBold)
+           .fontSize(12)
+           .fillColor('#1e3c72')
+           .text('Thành tiền:', summaryBoxLeft + 10, currentSummaryY);
+        doc.text(formatCurrency(thanhTien), summaryBoxLeft + 100, currentSummaryY, { width: 85, align: 'right' });
+        
+        // Footer
+        doc.moveDown(2);
+        doc.fontSize(10)
+           .font(vietnameseFont)
+           .fillColor('#666666')
+           .text('Cảm ơn quý khách đã sử dụng dịch vụ!', { align: 'center' });
+        
+        // Finalize PDF
+        doc.end();
+        
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi xuất PDF',
             error: err.message
         });
     }
