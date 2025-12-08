@@ -626,6 +626,10 @@
                 <span class="menu-item-icon">📝</span>
                 <span>Chi Tiết Hóa Đơn</span>
             </div>
+            <div class="menu-item" onclick="showPage('magiamgia', this)">
+                <span class="menu-item-icon">🎫</span>
+                <span>Mã Giảm Giá</span>
+            </div>
         </div>
 
         <!-- Main Content -->
@@ -798,10 +802,12 @@
                 fields: [
                     { name: 'maHD', label: 'Mã HD', type: 'text', required: true },
                     { name: 'maNV', label: 'Mã NV', type: 'text', required: true },
+                    { name: 'maKH', label: 'Mã KH', type: 'text', required: false },
                     { name: 'ngaylap', label: 'Ngày Lập', type: 'date', required: true },
-                    { name: 'tongtien', label: 'Tổng Tiền', type: 'number', required: false }
+                    { name: 'codeMGG', label: 'Mã Giảm Giá', type: 'text', required: false }
                 ],
-                displayFields: ['maHD', 'maNV', 'ngaylap', 'tongtien']
+                displayFields: ['maHD', 'maNV', 'maKH', 'ngaylap', 'tongtien', 'tiengiamgia'],
+                customActions: true
             },
             chitiethd: {
                 title: 'Quản Lý Chi Tiết Hóa Đơn',
@@ -810,12 +816,25 @@
                     { name: 'maHD', label: 'Mã HD', type: 'text', required: true },
                     { name: 'maHang', label: 'Mã Hàng', type: 'text', required: true },
                     { name: 'soluong', label: 'Số Lượng', type: 'number', required: true },
-                    { name: 'dongia', label: 'Đơn Giá', type: 'number', required: true },
-                    { name: 'chietkhau', label: 'Chiết Khấu', type: 'number', required: false },
-                    { name: 'tongtien', label: 'Tổng Tiền', type: 'number', required: false }
+                    { name: 'dongia', label: 'Đơn Giá', type: 'number', required: true }
                 ],
-                displayFields: ['maHD', 'maHang', 'soluong', 'dongia', 'chietkhau', 'tongtien'],
+                displayFields: ['maHD', 'maHang', 'soluong', 'dongia', 'tongtien'],
                 compositeKey: ['maHD', 'maHang']
+            },
+            magiamgia: {
+                title: 'Quản Lý Mã Giảm Giá',
+                api: 'magiamgia',
+                fields: [
+                    { name: 'maMGG', label: 'Mã MGG', type: 'text', required: true },
+                    { name: 'code', label: 'Mã Code', type: 'text', required: true },
+                    { name: 'phantramgiam', label: 'Phần Trăm Giảm (%)', type: 'number', required: true },
+                    { name: 'ngaybatdau', label: 'Ngày Bắt Đầu', type: 'date', required: false },
+                    { name: 'ngayketthuc', label: 'Ngày Kết Thúc', type: 'date', required: false },
+                    { name: 'trangthai', label: 'Trạng Thái', type: 'select', options: [{ value: '1', label: 'Còn hiệu lực' }, { value: '0', label: 'Hết hiệu lực' }], required: false },
+                    { name: 'gioihan', label: 'Giới Hạn Sử Dụng', type: 'number', required: false },
+                    { name: 'mota', label: 'Mô Tả', type: 'text', required: false }
+                ],
+                displayFields: ['maMGG', 'code', 'phantramgiam', 'ngaybatdau', 'ngayketthuc', 'trangthai', 'soluongsudung', 'gioihan']
             }
         };
 
@@ -921,13 +940,28 @@
                 page.displayFields.forEach(field => {
                     let value = item[field];
                     if (value === null || value === undefined) value = '-';
-                    if (typeof value === 'boolean') value = value ? 'Nam' : 'Nữ';
+                    if (typeof value === 'boolean') {
+                        value = value ? 'Còn hiệu lực' : 'Hết hiệu lực';
+                    }
+                    if (field === 'tongtien' || field === 'tiengiamgia') {
+                        value = value ? parseFloat(value).toLocaleString('vi-VN') + ' đ' : '0 đ';
+                    }
+                    if (field === 'phantramgiam') {
+                        value = value + '%';
+                    }
                     html += `<td>${value}</td>`;
                 });
                 html += `<td class="action-btns">
                     <button class="btn btn-warning btn-sm" onclick="openEditModal(${index})">✏️ Sửa</button>
-                    <button class="btn btn-danger btn-sm" onclick="deleteItem(${index})">🗑️ Xóa</button>
-                </td></tr>`;
+                    <button class="btn btn-danger btn-sm" onclick="deleteItem(${index})">🗑️ Xóa</button>`;
+                
+                // Add PDF and Excel export buttons for invoices
+                if (currentPage === 'hoadon') {
+                    html += `<button class="btn btn-secondary btn-sm" onclick="exportPDF('${item.maHD}')">📄 PDF</button>`;
+                    html += `<button class="btn btn-success btn-sm" onclick="exportExcel('${item.maHD}')">📊 Excel</button>`;
+                }
+                
+                html += `</td></tr>`;
             });
 
             html += '</tbody></table>';
@@ -979,6 +1013,13 @@
                     value = '1';
                 } else if (field.type === 'select' && value === false) {
                     value = '0';
+                } else if (field.type === 'select' && typeof value === 'boolean') {
+                    value = value ? '1' : '0';
+                }
+                
+                // Special handling for invoice discount code - use codeMGG from data
+                if (field.name === 'codeMGG' && data && data.codeMGG) {
+                    value = data.codeMGG;
                 }
                 
                 html += `<div class="form-group">
@@ -994,8 +1035,8 @@
                     const inputType = field.type === 'number' ? 'number' :
                         field.type === 'date' ? 'date' :
                             field.type === 'email' ? 'email' : 'text';
-                    const readonly = field.name.includes('ma') && data ? 'readonly' : '';
-                    html += `<input type="${inputType}" name="${field.name}" value="${value}" ${field.required ? 'required' : ''} ${readonly} step="${field.type === 'number' ? 'any' : ''}">`;
+                    const readonly = (field.name.includes('ma') && data && !field.name.includes('codeMGG')) ? 'readonly' : '';
+                    html += `<input type="${inputType}" name="${field.name}" value="${value}" ${field.required ? 'required' : ''} ${readonly} step="${field.type === 'number' ? 'any' : ''}" placeholder="${field.name === 'codeMGG' ? 'Nhập mã giảm giá (ví dụ: SALE10)' : ''}">`;
                 }
                 html += '</div>';
             });
@@ -1174,6 +1215,60 @@
                 closeModal();
             }
         });
+
+        // Export PDF
+        async function exportPDF(maHD) {
+            try {
+                const response = await fetch(`${API_BASE}/hoadon/${maHD}/pdf`);
+                if (!response.ok) {
+                    const error = await response.json();
+                    showAlert(error.message || 'Lỗi khi xuất PDF', 'error');
+                    return;
+                }
+                
+                // Create blob and download
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `HoaDon_${maHD}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                
+                showAlert('Xuất PDF thành công!', 'success');
+            } catch (error) {
+                showAlert('Lỗi: ' + error.message, 'error');
+            }
+        }
+
+        // Export Excel
+        async function exportExcel(maHD) {
+            try {
+                const response = await fetch(`${API_BASE}/hoadon/${maHD}/export?format=excel`);
+                if (!response.ok) {
+                    const error = await response.json();
+                    showAlert(error.message || 'Lỗi khi xuất Excel', 'error');
+                    return;
+                }
+                
+                // Create blob and download
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `HoaDon_${maHD}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                
+                showAlert('Xuất Excel thành công!', 'success');
+            } catch (error) {
+                showAlert('Lỗi: ' + error.message, 'error');
+            }
+        }
 
         // Initialize page on load
         window.onload = function() {
