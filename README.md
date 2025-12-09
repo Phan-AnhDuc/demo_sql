@@ -242,3 +242,25 @@ CREATE TABLE LICHSU_SUDUNG_MGG(
         ON DELETE NO ACTION
         ON UPDATE NO ACTION
 );
+
+-- =============================================
+-- HƯỚNG DẪN CÀI ĐẶT FONT CHO XUẤT PDF
+-- =============================================
+
+Để xuất PDF tiếng Việt không bị lỗi font, bạn cần cài đặt font hỗ trợ tiếng Việt:
+
+1. Tự động tải font (Khuyến nghị):
+   - Chạy lệnh: node download-fonts.js
+   - Script sẽ tự động tải font Noto Sans vào thư mục ./fonts/
+
+2. Thủ công:
+   - Tải font Noto Sans từ: https://fonts.google.com/noto/specimen/Noto+Sans
+   - Tạo thư mục ./fonts/ trong thư mục dự án
+   - Đặt các file font sau vào thư mục fonts/:
+     * NotoSans-Regular.ttf
+     * NotoSans-Bold.ttf
+
+3. Hệ thống sẽ tự động sử dụng font hệ thống Windows (Arial, Tahoma) nếu không tìm thấy font trong thư mục ./fonts/
+
+Lưu ý: Excel export hoạt động tốt với tiếng Việt vì ExcelJS tự động hỗ trợ UTF-8.
+PDF export cần font hỗ trợ Unicode để hiển thị đúng tiếng Việt.

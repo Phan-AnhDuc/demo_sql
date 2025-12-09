@@ -2036,7 +2036,7 @@ app.post('/api/hoadon', async (req, res) => {
                 .query(`SELECT maMGG, phantramgiam, ngaybatdau, ngayketthuc, trangthai, soluongsudung, gioihan 
                         FROM MAGIAMGIA 
                         WHERE code = @code AND trangthai = 1`);
-            
+
             if (mggResult.recordset.length > 0) {
                 const mgg = mggResult.recordset[0];
                 const today = new Date();
@@ -2113,14 +2113,14 @@ app.put('/api/hoadon/:maHD', async (req, res) => {
     }
     try {
         const pool = await poolPromise;
-        
+
         // Get current invoice to check old discount code
         const currentResult = await pool.request()
             .input('maHD', sql.NVarChar(10), maHD)
             .query('SELECT maMGG FROM HOADON WHERE maHD = @maHD');
-        
+
         const oldMaMGG = currentResult.recordset.length > 0 ? currentResult.recordset[0].maMGG : null;
-        
+
         let maMGG = null;
 
         // Validate and get discount code if provided
@@ -2130,7 +2130,7 @@ app.put('/api/hoadon/:maHD', async (req, res) => {
                 .query(`SELECT maMGG, phantramgiam, ngaybatdau, ngayketthuc, trangthai, soluongsudung, gioihan 
                         FROM MAGIAMGIA 
                         WHERE code = @code AND trangthai = 1`);
-            
+
             if (mggResult.recordset.length > 0) {
                 const mgg = mggResult.recordset[0];
                 const today = new Date();
@@ -2172,16 +2172,16 @@ app.put('/api/hoadon/:maHD', async (req, res) => {
         const totalResult = await pool.request()
             .input('maHD', sql.NVarChar(10), maHD)
             .query('SELECT SUM(tongtien) as tongtien FROM CHITIET_HD WHERE maHD = @maHD');
-        
+
         const tongtien = totalResult.recordset[0].tongtien || 0;
-        
+
         // Calculate discount amount
         let tiengiamgia = 0;
         if (maMGG && tongtien > 0) {
             const mggResult = await pool.request()
                 .input('maMGG', sql.NVarChar(10), maMGG)
                 .query('SELECT phantramgiam FROM MAGIAMGIA WHERE maMGG = @maMGG');
-            
+
             if (mggResult.recordset.length > 0) {
                 const phantramgiam = mggResult.recordset[0].phantramgiam;
                 tiengiamgia = (tongtien * phantramgiam) / 100;
@@ -2343,7 +2343,7 @@ app.post('/api/chitiethd', async (req, res) => {
         const pool = await poolPromise;
         // Calculate tongtien = soluong * dongia
         const tongtien = soluong * dongia;
-        
+
         await pool.request()
             .input('maHD', sql.NVarChar(10), maHD)
             .input('maHang', sql.NVarChar(10), maHang)
@@ -2706,7 +2706,7 @@ app.get('/api/hoadon/:maHD/pdf', async (req, res) => {
     const { maHD } = req.params;
     try {
         const pool = await poolPromise;
-        
+
         // Get invoice data
         const invoiceResult = await pool.request()
             .input('maHD', sql.NVarChar(10), maHD)
@@ -2718,16 +2718,16 @@ app.get('/api/hoadon/:maHD/pdf', async (req, res) => {
                     LEFT JOIN KHACHHANG kh ON h.maKH = kh.maKH
                     LEFT JOIN MAGIAMGIA mgg ON h.maMGG = mgg.maMGG
                     WHERE h.maHD = @maHD`);
-        
+
         if (invoiceResult.recordset.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Không tìm thấy hóa đơn'
             });
         }
-        
+
         const invoice = invoiceResult.recordset[0];
-        
+
         // Get invoice details
         const detailsResult = await pool.request()
             .input('maHD', sql.NVarChar(10), maHD)
@@ -2737,13 +2737,13 @@ app.get('/api/hoadon/:maHD/pdf', async (req, res) => {
                     INNER JOIN HANGHOA hh ON cthd.maHang = hh.maHang
                     WHERE cthd.maHD = @maHD
                     ORDER BY cthd.maHang`);
-        
+
         const details = detailsResult.recordset;
-        
-        // Create PDF with A4 portrait (dọc) - 595.28 x 841.89 points
-        const doc = new PDFDocument({ 
-            margin: 50,
-            size: [595.28, 841.89], // A4 portrait (width x height in points)
+
+        // Create PDF with A4 portrait
+        const doc = new PDFDocument({
+            margin: 10,
+            size: 'A4',
             layout: 'portrait',
             info: {
                 Title: `Hoa Don ${maHD}`,
@@ -2751,21 +2751,32 @@ app.get('/api/hoadon/:maHD/pdf', async (req, res) => {
                 Subject: 'Hoa don ban hang'
             }
         });
-        
-        // Try to register Vietnamese font if available
-        // Font files should be placed in a 'fonts' folder in the project root
+
+        // Font registration
         const fontsDir = path.join(__dirname, 'fonts');
-        let vietnameseFont = 'Times-Roman'; // Default fallback
+        const windowsFontsDir = process.platform === 'win32'
+            ? path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts')
+            : null;
+
+        let vietnameseFont = 'Times-Roman';
         let vietnameseFontBold = 'Times-Bold';
-        
-        // Check for common Vietnamese fonts
+
         const fontFiles = {
             'NotoSans-Regular.ttf': 'NotoSans',
             'NotoSans-Bold.ttf': 'NotoSansBold',
             'Arial-Unicode-MS.ttf': 'ArialUnicode',
             'Times-New-Roman.ttf': 'TimesNewRoman'
         };
-        
+
+        const windowsFontFiles = {
+            'arial.ttf': 'Arial',
+            'arialbd.ttf': 'ArialBold',
+            'times.ttf': 'TimesNewRoman',
+            'timesbd.ttf': 'TimesNewRomanBold',
+            'tahoma.ttf': 'Tahoma',
+            'tahomabd.ttf': 'TahomaBold'
+        };
+
         for (const [filename, fontName] of Object.entries(fontFiles)) {
             const fontPath = path.join(fontsDir, filename);
             if (fs.existsSync(fontPath)) {
@@ -2782,244 +2793,322 @@ app.get('/api/hoadon/:maHD/pdf', async (req, res) => {
                 }
             }
         }
-        
-        // Set response headers
+
+        if (windowsFontsDir && fs.existsSync(windowsFontsDir) && vietnameseFont === 'Times-Roman') {
+            const preferredFonts = ['arial.ttf', 'tahoma.ttf', 'times.ttf'];
+            const preferredBoldFonts = ['arialbd.ttf', 'tahomabd.ttf', 'timesbd.ttf'];
+
+            for (const preferredFont of preferredFonts) {
+                if (windowsFontFiles[preferredFont]) {
+                    const fontPath = path.join(windowsFontsDir, preferredFont);
+                    if (fs.existsSync(fontPath)) {
+                        try {
+                            const fontName = windowsFontFiles[preferredFont];
+                            doc.registerFont(fontName, fontPath);
+                            vietnameseFont = fontName;
+                            break;
+                        } catch (e) {
+                            console.log(`Could not register Windows font ${preferredFont}:`, e.message);
+                        }
+                    }
+                }
+            }
+
+            for (const preferredBoldFont of preferredBoldFonts) {
+                if (windowsFontFiles[preferredBoldFont]) {
+                    const fontPath = path.join(windowsFontsDir, preferredBoldFont);
+                    if (fs.existsSync(fontPath)) {
+                        try {
+                            const fontName = windowsFontFiles[preferredBoldFont];
+                            doc.registerFont(fontName, fontPath);
+                            vietnameseFontBold = fontName;
+                            break;
+                        } catch (e) {
+                            console.log(`Could not register Windows bold font ${preferredBoldFont}:`, e.message);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (vietnameseFont === 'Times-Roman') {
+            console.warn('Warning: Vietnamese font not found. PDF may display Vietnamese text incorrectly.');
+        }
+
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="HoaDon_${maHD}.pdf"`);
-        
-        // Pipe PDF to response
         doc.pipe(res);
-        
-        // Helper function to safely get text (handle null/undefined and encoding)
+
+        // Helper functions
         const safeText = (text) => {
             if (text === null || text === undefined) return '';
-            // Convert to string and ensure proper encoding for Vietnamese characters
-            let str = String(text);
-            // Ensure UTF-8 encoding for Vietnamese characters
-            // PDFKit should handle UTF-8 properly, but we ensure it's a proper string
             try {
-                // Normalize the string to ensure proper encoding
-                return str.normalize('NFC');
+                return String(text).normalize('NFC');
             } catch (e) {
-                return str;
+                return String(text);
             }
         };
-        
-        // Helper function to format currency
+
         const formatCurrency = (amount) => {
             return parseFloat(amount || 0).toLocaleString('vi-VN') + ' đ';
         };
-        
-        // Helper function to format date
+
         const formatDate = (date) => {
             if (!date) return '';
             const d = new Date(date);
-            return d.toLocaleDateString('vi-VN', { 
-                year: 'numeric', 
-                month: '2-digit', 
-                day: '2-digit' 
+            return d.toLocaleDateString('vi-VN', {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric'
             });
         };
-        
-        // Title - Use Vietnamese font
-        doc.fontSize(24)
-           .font(vietnameseFontBold)
-           .fillColor('#1e3c72')
-           .text('HÓA ĐƠN BÁN HÀNG', { align: 'center' });
-        doc.moveDown(0.5);
-        
-        // Draw separator line (adjusted for A4 portrait width: 595.28 - 100 margins = ~495)
-        doc.moveTo(50, doc.y)
-           .lineTo(495, doc.y)
-           .lineWidth(2)
-           .strokeColor('#667eea')
-           .stroke();
-        doc.moveDown(1);
-        
-        // Invoice info section - Use Vietnamese font
-        doc.fontSize(11)
-           .font(vietnameseFont)
-           .fillColor('#333333');
-        
-        const infoStartY = doc.y;
-        doc.text('Mã hóa đơn:', 50, infoStartY);
-        doc.font(vietnameseFontBold).text(safeText(invoice.maHD), 150, infoStartY);
-        
-        doc.font(vietnameseFont).text('Ngày lập:', 350, infoStartY);
-        doc.text(formatDate(invoice.ngaylap), 420, infoStartY);
-        doc.moveDown(1);
-        
-        // Customer info
+
+        const pageWidth = 595.28;
+        const margin = 40;
+        const contentWidth = pageWidth - (margin * 2);
+
+        // Header with logo space
+        doc.fontSize(26)
+            .font(vietnameseFontBold)
+            .fillColor('#2563eb')
+            .text('HÓA ĐƠN BÁN HÀNG', margin, 50, { align: 'center' });
+
+        // Decorative line
+        doc.moveTo(margin, 90)
+            .lineTo(pageWidth - margin, 90)
+            .lineWidth(3)
+            .strokeColor('#3b82f6')
+            .stroke();
+
+        doc.moveTo(margin, 94)
+            .lineTo(pageWidth - margin, 94)
+            .lineWidth(1)
+            .strokeColor('#93c5fd')
+            .stroke();
+
+        // Invoice info in two columns
+        let yPos = 115;
+        doc.fontSize(10)
+            .font(vietnameseFont)
+            .fillColor('#374151');
+
+        // Left column
+        doc.font(vietnameseFontBold).text('Mã hóa đơn:', margin, yPos);
+        doc.font(vietnameseFont).text(safeText(invoice.maHD), margin + 90, yPos);
+
+        // Right column
+        doc.font(vietnameseFontBold).text('Ngày lập:', pageWidth / 2 + 20, yPos);
+        doc.font(vietnameseFont).text(formatDate(invoice.ngaylap), pageWidth / 2 + 90, yPos);
+
+        yPos += 25;
+
+        // Customer info section
         if (invoice.tenKH) {
-            doc.font(vietnameseFont).text('Khách hàng:', 50);
-            doc.font(vietnameseFontBold).text(safeText(invoice.tenKH), 150, doc.y - 15);
-            
+            doc.rect(margin, yPos - 5, contentWidth, 1)
+                .fillColor('#e5e7eb')
+                .fill();
+
+            yPos += 10;
+
+            doc.fontSize(11)
+                .font(vietnameseFontBold)
+                .fillColor('#1f2937')
+                .text('THÔNG TIN KHÁCH HÀNG', margin, yPos);
+
+            yPos += 20;
+            doc.fontSize(10).font(vietnameseFont).fillColor('#374151');
+
+            // Customer name
+            doc.font(vietnameseFontBold).text('Khách hàng:', margin, yPos);
+            doc.font(vietnameseFont).text(safeText(invoice.tenKH), margin + 90, yPos);
+            yPos += 18;
+
+            // Address and phone in two columns
             if (invoice.diachi) {
-                doc.font(vietnameseFont).text('Địa chỉ:', 50);
-                doc.text(safeText(invoice.diachi), 150, doc.y - 15);
+                doc.font(vietnameseFontBold).text('Địa chỉ:', margin, yPos);
+                doc.font(vietnameseFont).text(safeText(invoice.diachi), margin + 90, yPos, {
+                    width: contentWidth / 2 - 100
+                });
             }
-            
+
             if (invoice.sdt) {
-                doc.font(vietnameseFont).text('SĐT:', 50);
-                doc.text(safeText(invoice.sdt), 150, doc.y - 15);
+                const phoneX = invoice.diachi ? pageWidth / 2 + 20 : margin;
+                const phoneValueX = invoice.diachi ? pageWidth / 2 + 60 : margin + 90;
+                doc.font(vietnameseFontBold).text('SĐT:', phoneX, yPos);
+                doc.font(vietnameseFont).text(safeText(invoice.sdt), phoneValueX, yPos);
             }
-            doc.moveDown(0.8);
+
+            yPos += 35;
         }
-        
+
         // Staff info
-        doc.font(vietnameseFont).text('Nhân viên:', 50);
-        doc.font(vietnameseFontBold).text(safeText(invoice.tenNV || 'N/A'), 150, doc.y - 15);
-        doc.moveDown(0.8);
-        
+        doc.rect(margin, yPos - 5, contentWidth, 1)
+            .fillColor('#000000')
+            .fill();
+
+        yPos += 10;
+        doc.font(vietnameseFontBold).text('Nhân viên:', margin, yPos);
+        doc.font(vietnameseFont).text(safeText(invoice.tenNV || 'N/A'), margin + 90, yPos);
+
         // Discount code
         if (invoice.codeMGG) {
+            doc.font(vietnameseFontBold).text('Mã giảm giá:', pageWidth / 2 + 20, yPos);
             doc.font(vietnameseFont)
-               .fillColor('#0066cc')
-               .text(`Mã giảm giá: ${safeText(invoice.codeMGG)} (${invoice.phantramgiam}%)`, 50);
-            doc.fillColor('#333333');
-            doc.moveDown(0.8);
+                .fillColor('#0891b2')
+                .text(`${safeText(invoice.codeMGG)} (${invoice.phantramgiam}%)`,
+                    pageWidth / 2 + 95, yPos);
+            doc.fillColor('#374151');
         }
-        
-        doc.moveDown(0.5);
-        
-        // Table section (adjusted for A4 portrait: 595.28 - 100 margins = 495.28)
-        const tableTop = doc.y;
-        const tableLeft = 50;
-        const tableWidth = 445; // Reduced width for portrait
-        const colWidths = [30, 70, 150, 50, 45, 70, 80]; // STT, Mã, Tên, ĐV, SL, Đơn giá, Thành tiền
-        const colPositions = [tableLeft];
+
+        yPos += 30;
+
+        // Table
+        const tableTop = yPos;
+        const colWidths = [35, 65, 140, 45, 40, 75, 90];
+        const colX = [margin];
         for (let i = 1; i < colWidths.length; i++) {
-            colPositions[i] = colPositions[i - 1] + colWidths[i - 1];
+            colX[i] = colX[i - 1] + colWidths[i - 1];
         }
-        
-        // Table header background
-        doc.rect(tableLeft, tableTop, tableWidth, 25)
-           .fillColor('#667eea')
-           .fill();
-        
-        // Table header text - Use Vietnamese font
+
+        // Table header
+        doc.rect(margin, tableTop, contentWidth, 28)
+            .fillAndStroke('#3b82f6', '#2563eb');
+
         doc.fontSize(10)
-           .font(vietnameseFontBold)
-           .fillColor('#FFFFFF')
-           .text('STT', colPositions[0] + 5, tableTop + 8)
-           .text('Mã hàng', colPositions[1] + 5, tableTop + 8)
-           .text('Tên hàng', colPositions[2] + 5, tableTop + 8)
-           .text('ĐV', colPositions[3] + 5, tableTop + 8)
-           .text('SL', colPositions[4] + 5, tableTop + 8)
-           .text('Đơn giá', colPositions[5], tableTop + 8, { width: colWidths[5] - 10, align: 'right' })
-           .text('Thành tiền', colPositions[6], tableTop + 8, { width: colWidths[6] - 10, align: 'right' });
-        
+            .font(vietnameseFontBold)
+            .fillColor('#ffffff');
+
+        const headerY = tableTop + 10;
+        doc.text('STT', colX[0] + 5, headerY, { width: colWidths[0] - 10, align: 'center' })
+            .text('Mã hàng', colX[1] + 5, headerY, { width: colWidths[1] - 10 })
+            .text('Tên hàng', colX[2] + 5, headerY, { width: colWidths[2] - 10 })
+            .text('ĐVT', colX[3] + 5, headerY, { width: colWidths[3] - 10, align: 'center' })
+            .text('SL', colX[4] + 5, headerY, { width: colWidths[4] - 10, align: 'center' })
+            .text('Đơn giá', colX[5] + 5, headerY, { width: colWidths[5] - 10, align: 'right' })
+            .text('Thành tiền', colX[6] + 5, headerY, { width: colWidths[6] - 10, align: 'right' });
+
         // Table rows
-        let yPos = tableTop + 30;
-        let stt = 1;
-        doc.fontSize(9)
-           .font(vietnameseFont)
-           .fillColor('#333333');
-        
+        yPos = tableTop + 33;
+        doc.fontSize(9.5)
+            .font(vietnameseFont)
+            .fillColor('#1f2937');
+
         details.forEach((item, index) => {
-            // Check if need new page
-            if (yPos > 700) {
+            if (yPos > 720) {
                 doc.addPage();
                 yPos = 50;
-                
-                // Redraw header on new page
-                doc.rect(tableLeft, yPos - 25, tableWidth, 25)
-                   .fillColor('#667eea')
-                   .fill();
-                doc.fontSize(10)
-                   .font(vietnameseFontBold)
-                   .fillColor('#FFFFFF')
-                   .text('STT', colPositions[0] + 5, yPos - 17)
-                   .text('Mã hàng', colPositions[1] + 5, yPos - 17)
-                   .text('Tên hàng', colPositions[2] + 5, yPos - 17)
-                   .text('ĐV', colPositions[3] + 5, yPos - 17)
-                   .text('SL', colPositions[4] + 5, yPos - 17)
-                   .text('Đơn giá', colPositions[5], yPos - 17, { width: colWidths[5] - 10, align: 'right' })
-                   .text('Thành tiền', colPositions[6], yPos - 17, { width: colWidths[6] - 10, align: 'right' });
-                yPos += 5;
+
+                // Redraw header
+                doc.rect(margin, yPos, contentWidth, 28)
+                    .fillAndStroke('#3b82f6', '#2563eb');
+                doc.fontSize(10).font(vietnameseFontBold).fillColor('#ffffff');
+                const newHeaderY = yPos + 10;
+                doc.text('STT', colX[0] + 5, newHeaderY, { width: colWidths[0] - 10, align: 'center' })
+                    .text('Mã hàng', colX[1] + 5, newHeaderY, { width: colWidths[1] - 10 })
+                    .text('Tên hàng', colX[2] + 5, newHeaderY, { width: colWidths[2] - 10 })
+                    .text('ĐVT', colX[3] + 5, newHeaderY, { width: colWidths[3] - 10, align: 'center' })
+                    .text('SL', colX[4] + 5, newHeaderY, { width: colWidths[4] - 10, align: 'center' })
+                    .text('Đơn giá', colX[5] + 5, newHeaderY, { width: colWidths[5] - 10, align: 'right' })
+                    .text('Thành tiền', colX[6] + 5, newHeaderY, { width: colWidths[6] - 10, align: 'right' });
+                yPos += 33;
+                doc.fontSize(9.5).font(vietnameseFont).fillColor('#1f2937');
             }
-            
-            // Alternate row background
+
+            // Alternate row colors
             if (index % 2 === 0) {
-                doc.rect(tableLeft, yPos - 3, tableWidth, 18)
-                   .fillColor('#f8f9fa')
-                   .fill();
+                doc.rect(margin, yPos - 2, contentWidth, 22)
+                    .fillColor('#f9fafb')
+                    .fill();
             }
-            
-            // Row data
-            doc.fillColor('#333333')
-               .text(stt.toString(), colPositions[0] + 5, yPos)
-               .text(safeText(item.maHang), colPositions[1] + 5, yPos, { width: colWidths[1] - 10 })
-               .text(safeText(item.loaihang || ''), colPositions[2] + 5, yPos, { width: colWidths[2] - 10 })
-               .text(safeText(item.donvi || ''), colPositions[3] + 5, yPos, { width: colWidths[3] - 10 })
-               .text(safeText(item.soluong.toString()), colPositions[4] + 5, yPos, { width: colWidths[4] - 10, align: 'center' })
-               .text(formatCurrency(item.dongia), colPositions[5], yPos, { width: colWidths[5] - 10, align: 'right' })
-               .text(formatCurrency(item.tongtien), colPositions[6], yPos, { width: colWidths[6] - 10, align: 'right' });
-            
-            yPos += 20;
-            stt++;
+
+            const rowY = yPos + 4;
+            doc.fillColor('#1f2937')
+                .text((index + 1).toString(), colX[0] + 5, rowY, { width: colWidths[0] - 10, align: 'center' })
+                .text(safeText(item.maHang), colX[1] + 5, rowY, { width: colWidths[1] - 10 })
+                .text(safeText(item.loaihang || ''), colX[2] + 5, rowY, { width: colWidths[2] - 10 })
+                .text(safeText(item.donvi || ''), colX[3] + 5, rowY, { width: colWidths[3] - 10, align: 'center' })
+                .text(item.soluong.toString(), colX[4] + 5, rowY, { width: colWidths[4] - 10, align: 'center' })
+                .text(formatCurrency(item.dongia), colX[5] + 5, rowY, { width: colWidths[5] - 10, align: 'right' })
+                .text(formatCurrency(item.tongtien), colX[6] + 5, rowY, { width: colWidths[6] - 10, align: 'right' });
+
+            yPos += 22;
         });
-        
-        // Draw table border
-        doc.rect(tableLeft, tableTop, tableWidth, yPos - tableTop - 5)
-           .lineWidth(1)
-           .strokeColor('#cccccc')
-           .stroke();
-        
-        // Summary section (adjusted for portrait)
-        const summaryY = yPos + 15;
+
+        // Table border
+        doc.rect(margin, tableTop, contentWidth, yPos - tableTop)
+            .lineWidth(1)
+            .strokeColor('#d1d5db')
+            .stroke();
+
+        // Summary section
+        yPos += 25;
+        const summaryBoxWidth = 240;
+        const summaryBoxLeft = pageWidth - margin - summaryBoxWidth;
         const tongTien = parseFloat(invoice.tongtien) || 0;
         const tienGiamGia = parseFloat(invoice.tiengiamgia) || 0;
         const thanhTien = tongTien - tienGiamGia;
-        
-        doc.fontSize(11)
-           .font(vietnameseFont)
-           .fillColor('#333333');
-        
-        // Summary box (adjusted position for portrait)
-        const summaryBoxLeft = 300;
-        const summaryBoxWidth = 195;
-        const summaryBoxTop = summaryY;
-        const summaryBoxHeight = tienGiamGia > 0 ? 70 : 50;
-        
-        doc.rect(summaryBoxLeft, summaryBoxTop, summaryBoxWidth, summaryBoxHeight)
-           .fillColor('#f0f0f0')
-           .fill()
-           .lineWidth(1)
-           .strokeColor('#cccccc')
-           .stroke();
-        
-        let currentSummaryY = summaryBoxTop + 10;
-        
-        doc.text('Tổng tiền:', summaryBoxLeft + 10, currentSummaryY);
+
+        const summaryHeight = tienGiamGia > 0 ? 105 : 70;
+
+        // Summary box with gradient effect
+        doc.rect(summaryBoxLeft, yPos, summaryBoxWidth, summaryHeight)
+            .fillColor('#f8fafc')
+            .fillAndStroke('#f8fafc', '#cbd5e1');
+
+        doc.fontSize(10.5).font(vietnameseFont).fillColor('#374151');
+        let summaryY = yPos + 15;
+
+        // Total
+        doc.text('Tổng tiền:', summaryBoxLeft + 15, summaryY);
         doc.font(vietnameseFontBold)
-           .text(formatCurrency(tongTien), summaryBoxLeft + 100, currentSummaryY, { width: 85, align: 'right' });
-        
+            .text(formatCurrency(tongTien), summaryBoxLeft + 120, summaryY, {
+                width: 105,
+                align: 'right'
+            });
+
+        // Discount
         if (tienGiamGia > 0) {
-            currentSummaryY += 20;
+            summaryY += 25;
             doc.font(vietnameseFont)
-               .fillColor('#cc0000')
-               .text('Tiền giảm giá:', summaryBoxLeft + 10, currentSummaryY);
-            doc.text('-' + formatCurrency(tienGiamGia), summaryBoxLeft + 100, currentSummaryY, { width: 85, align: 'right' });
+                .fillColor('#dc2626')
+                .text('Tiền giảm giá:', summaryBoxLeft + 15, summaryY);
+            doc.font(vietnameseFontBold)
+                .text('-' + formatCurrency(tienGiamGia), summaryBoxLeft + 120, summaryY, {
+                    width: 105,
+                    align: 'right'
+                });
         }
-        
-        currentSummaryY += 20;
-        doc.font(vietnameseFontBold)
-           .fontSize(12)
-           .fillColor('#1e3c72')
-           .text('Thành tiền:', summaryBoxLeft + 10, currentSummaryY);
-        doc.text(formatCurrency(thanhTien), summaryBoxLeft + 100, currentSummaryY, { width: 85, align: 'right' });
-        
+
+        // Final total
+        summaryY += 28;
+        doc.fontSize(12)
+            .font(vietnameseFontBold)
+            .fillColor('#1e40af')
+            .text('Thành tiền:', summaryBoxLeft + 15, summaryY);
+        doc.text(formatCurrency(thanhTien), summaryBoxLeft + 120, summaryY, {
+            width: 105,
+            align: 'right'
+        });
+
         // Footer
-        doc.moveDown(2);
-        doc.fontSize(10)
-           .font(vietnameseFont)
-           .fillColor('#666666')
-           .text('Cảm ơn quý khách đã sử dụng dịch vụ!', { align: 'center' });
-        
-        // Finalize PDF
+        const footerY = 770;
+        doc.fontSize(9)
+            .font(vietnameseFont)
+            .fillColor('#6b7280')
+            .text('Cảm ơn quý khách đã sử dụng dịch vụ!', margin, footerY, {
+                align: 'center',
+                width: contentWidth
+            });
+
+        doc.fontSize(8)
+            .text('FMSTYLE - Địa chỉ: 171 Bà Triệu, Huế - Hotline: 1900 9090',
+                margin, footerY + 15, {
+                align: 'center',
+                width: contentWidth
+            });
+
         doc.end();
-        
+
     } catch (err) {
         res.status(500).json({
             success: false,
@@ -3028,7 +3117,7 @@ app.get('/api/hoadon/:maHD/pdf', async (req, res) => {
         });
     }
 });
-
+      
 // ================== HOME PAGE ==================
 app.get('/', (req, res) => {
     res.send(`
